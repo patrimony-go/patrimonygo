@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "314603793335",
+    "project_id": "patrimonygo-9c977",
+    "storage_bucket": "patrimonygo-9c977.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:314603793335:android:fb62655d28ee8bd28c9632",
+        "android_client_info": {
+          "package_name": "com.hub.patrimonyGo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAbjr3y81PhlEpFibGxu0EGHes4NBStfyE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
