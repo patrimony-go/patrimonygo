@@ -195,8 +195,8 @@ const MapScreen = () => {
         operation: 'Dias: todos os dias exceto terça e sábado. Horário: 17h a 19h. Custo de ingresso: Gratuito. Acessibilidade: acessível.',
         source: 'roteirosbs.com.br, alxadasa.usp.br',
         imageUrls: [
-          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO_1.jpg'),
-          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO_2.jpg'),
+          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO 01.jpg'),
+          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO 02.jpg'),
         ],
         latitude: -23.9298,
         longitude: -46.3305,
@@ -220,9 +220,9 @@ const MapScreen = () => {
         operation: 'Dias: Segunda a Sábado. Horário: Segunda a Sábado. Custo de ingresso: Gratuito. Acessibilidade: acessível.', // Adaptei do que estava visível
         source: 'n/a',
         imageUrls: [
-          require('./assets/Patrimonios/BASILICA EMBARE 01.jpg'),
-          require('./assets/Patrimonios/BASILICA EMBARE 02.jpg'),
-          require('./assets/Patrimonios/BASILICA EMBARE 03.jpg'),
+          require('./assets/Patrimonios/BASÍLICA EMBARÉ 01.jpg'),
+          require('./assets/Patrimonios/BASÍLICA EMBARÉ 02.jpg'),
+          require('./assets/Patrimonios/BASÍLICA EMBARÉ 03.jpg'),
         ], // Adicione require('./assets/Patrimonios/BASILICA_EMBARE_01.jpg') se tiver imagens
         latitude: -23.9743034, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DA BASÍLICA EMBARÉ
         longitude: -46.320091617, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DA BASÍLICA EMBARÉ
@@ -297,8 +297,8 @@ const MapScreen = () => {
         operation: 'Dias: Terça a Domingo. Horário: de terça a domingo. Custo de ingresso: pago (confirmar). Acessibilidade: acessível.', // Adaptei do que estava visível
         source: 'n/a',
         imageUrls: [
-          require('./assets/Patrimonios/museudocafe.png'),
-          require('./assets/Patrimonios/museudocafe 2.png'),
+          require('./assets/Patrimonios/MUSEU DO CAFÉ 01.png'),
+          require('./assets/Patrimonios/MUSEU DO CAFÉ 02.png'),
         ], // Adicione require('./assets/Patrimonios/MUSEU_CAFE_01.jpg') se tiver imagens
         latitude: -23.9351, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DO MUSEU DO CAFÉ
         longitude: -46.3262, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DO MUSEU DO CAFÉ
