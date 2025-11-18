@@ -10,22 +10,21 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@react-native-firebase/app": "^22.2.0",
-    "@react-native-firebase/firestore": "^22.2.0",
     "@react-navigation/bottom-tabs": "^7.3.14",
     "@react-navigation/native": "^7.1.10",
     "@react-navigation/native-stack": "^7.3.14",
-    "expo": "~53.0.10",
-    "expo-location": "~18.1.5",
+    "expo": "^53.0.23",
+    "expo-location": "^18.1.6",
     "expo-status-bar": "~2.2.3",
     "firebase": "^11.9.0",
     "react": "19.0.0",
-    "react-native": "0.79.3",
+    "react-native": "^0.79.6",
     "react-native-maps": "1.20.1",
     "react-native-svg": "15.11.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@react-native-community/cli": "latest",
     "@types/react": "~19.0.10",
     "typescript": "~5.8.3"
   },

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'; // Importado useRef para o ScrollView de imagens
+// App.tsx
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,41 +12,66 @@ import {
   ActivityIndicator,
   ScrollView,
   Modal,
-  Dimensions, // Para obter a largura da tela para o carrossel de imagens
+  Dimensions,
+  Alert,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator, NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { createBottomTabNavigator, BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
-import Svg, { Path, Circle } from 'react-native-svg'; // Importa Svg e Path para ícones
+import Svg, { Path, Circle } from 'react-native-svg';
+import { collection, onSnapshot, getDocs } from 'firebase/firestore';
+import { firestore as firebaseFirestore } from './firebase/config'; // sem extensão
 
-// Obtém a largura da tela para o carrossel de imagens
+// largura da tela para carrossel
 const { width: screenWidth } = Dimensions.get('window');
 
-// --- Definindo tipos para o React Navigation ---
+// Types para navegação
 type RootStackParamList = {
   Auth: undefined;
   MainTabs: undefined;
 };
-
 type AuthScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Auth'>;
-
 type MainTabParamList = {
   Map: undefined;
   Search: undefined;
   Profile: undefined;
 };
-
 type MapScreenNavigationProp = BottomTabNavigationProp<MainTabParamList, 'Map'>;
 type SearchScreenNavigationProp = BottomTabNavigationProp<MainTabParamList, 'Search'>;
 type ProfileScreenNavigationProp = BottomTabNavigationProp<MainTabParamList, 'Profile'>;
 
-
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-// --- Componente da Tela de Autenticação (Login/Cadastro) ---
+// --- HeritageSite type preservando nomes do Firestore ---
+type HeritageSite = {
+  id: string; // doc.id
+  // campos exatamente como no Firestore (conforme sua lista)
+  nm_patrimonio?: string;
+  nm_autor_projeto?: string;
+  imageUrls?: string[]; // espera array de URLs (Cloudinary / Storage)
+  ic_inauguracao?: string;
+  ds_fonte?: string;
+  ds_funcionamento?: string;
+  nu_longitude?: number | string; // no Firestore é float64, mas deixamos margem para string
+  nu_latitude?: number | string;
+  ic_tombamento?: string;
+  ds_uso_original?: string;
+  ds_uso_atual?: string;
+  ds_localizacao?: string;
+  ds_historico?: string;
+  ds_endereco?: string;
+  ds_grau?: string;
+  ic_projeto?: string;
+
+  // convenience fields (não substituem os originais; apenas para uso interno)
+  latitude?: number;
+  longitude?: number;
+};
+
+// ---------- AuthScreen (simples placeholder) ----------
 const AuthScreen = ({ navigation }: { navigation: AuthScreenNavigationProp }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -53,331 +79,244 @@ const AuthScreen = ({ navigation }: { navigation: AuthScreenNavigationProp }) =>
 
   const handleAuth = () => {
     if (email && password) {
-      console.log('E-mail:', email);
-      console.log('Senha:', password);
-      console.log(isRegistering ? 'Simulando Cadastro...' : 'Simulando Login...');
       navigation.navigate('MainTabs');
     } else {
-      alert('Por favor, preencha o e-mail e a senha.');
+      Alert.alert('Preencha e-mail e senha');
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <Image
-        source={require('./assets/patrimony.png')}
-        style={styles.logo}
-        accessibilityLabel="Logo do Aplicativo"
-      />
-
-      <TextInput
-        style={styles.input}
-        placeholder="E-mail"
-        placeholderTextColor="#888"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-
-      <TextInput
-        style={styles.input}
-        placeholder="Senha"
-        placeholderTextColor="#888"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-
-      <TouchableOpacity
-        style={styles.button}
-        onPress={handleAuth}
-      >
-        <Text style={styles.buttonText}>
-          {isRegistering ? 'Cadastrar' : 'Entrar'}
-        </Text>
+      <Image source={require('./assets/patrimony.png')} style={styles.logo} accessibilityLabel="Logo" />
+      <TextInput style={styles.input} placeholder="E-mail" placeholderTextColor="#888" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+      <TextInput style={styles.input} placeholder="Senha" placeholderTextColor="#888" value={password} onChangeText={setPassword} secureTextEntry />
+      <TouchableOpacity style={styles.button} onPress={handleAuth}>
+        <Text style={styles.buttonText}>{isRegistering ? 'Cadastrar' : 'Entrar'}</Text>
       </TouchableOpacity>
-
       <TouchableOpacity onPress={() => setIsRegistering(!isRegistering)}>
-        <Text style={styles.toggleText}>
-          {isRegistering
-            ? 'Já tem uma conta? Faça login'
-            : 'Não tem uma conta? Cadastre-se'}
-        </Text>
+        <Text style={styles.toggleText}>{isRegistering ? 'Já tem conta? Faça login' : 'Não tem conta? Cadastre-se'}</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );
 };
 
-// --- Componente da Tela do Mapa com Localização do Usuário ---
-const MapScreen = () => {
+// ---------- MapScreen (usa os nomes originais do Firestore) ----------
+const MapScreen: React.FC = () => {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const scrollViewRef = useRef<ScrollView>(null); // Ref para o ScrollView do carrossel de imagens
-  const [currentImageIndex, setCurrentImageIndex] = useState(0); // Estado para a imagem atual no carrossel
+  const [heritageSites, setHeritageSites] = useState<HeritageSite[]>([]);
+  const [sitesLoading, setSitesLoading] = useState(true);
 
-  // Coordenadas de Santos (Brasil)
+  const [selectedSite, setSelectedSite] = useState<HeritageSite | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  const scrollViewRef = useRef<ScrollView | null>(null);
+
   const SANTOS_LATITUDE = -23.9608;
   const SANTOS_LONGITUDE = -46.3331;
 
-  // Defina o tipo para os patrimônios
-  type HeritageSite = {
-    id: string;
-    name: string;
-    shortDescription: string;
-    address?: string;
-    about?: string;
-    appearsIn?: { text: string; rating?: number }[];
-    location?: string;
-    project?: string;
-    author?: string;
-    inauguration?: string;
-    originalUse?: string;
-    currentUse?: string;
-    history?: string;
-    tombamento?: string;
-    grade?: string;
-    operation?: string;
-    source?: string;
-    imageUrls?: any[];
-    latitude: number;
-    longitude: number;
-  };
-  
-    // Patrimônios localizados em Santos
-    const [heritageSites, setHeritageSites] = useState<HeritageSite[]>([
-      {
-        id: '1',
-        name: 'Casa do Trem Bélico',
-        shortDescription: 'Única edificação colonial-militar do gênero no país, com características da época de sua construção.',
-        address: 'Rua Tiro Onze, 11 - Centro Histórico, Santos - SP, 11013-040', // Novo campo
-        about: 'A Casa do Trem Bélico é a única edificação colonial-militar do gênero no país, com as características da época de sua construção. Foi armazém de equipamento bélico para a defesa da cidade. Tombada em 1937 e entregue ao IPHAN em 1965. Restaurada em 1977 pelo CONDEPRAAT, hoje funciona como um espaço cultural.', // Texto detalhado para 'SOBRE'
-        appearsIn: [ // Novo campo para 'APARECE EM'
-          { text: 'Tour no Centro de Santos', rating: 4.8 },
-        ],
-        location: 'Rua Tiro Onze, 11 - Centro Histórico, Santos - SP, 11013-040', // Mantido para detalhes
-        project: 'Não especificado (Uso Original: Armazém de equipamento bélico)',
-        author: 'José da Silva Pais',
-        inauguration: '1734',
-        originalUse: 'Armazém de equipamento bélico',
-        currentUse: 'Espaço Cultural',
-        history: 'Edificação colonial-militar do gênero, no país, com as características da construção desse tempo. Tombada em 1937 e entregue ao IPHAN em 1965. Restaurada em 1977 pelo CONDEPRAAT.',
-        tombamento: '1937 (IPHAN)',
-        grade: 'IPHAN',
-        operation: 'Dias: Quarta-feira a sábado. Horário: 11h às 17h. Custo de ingresso: Gratuito. Acessibilidade: acessível.',
-        source: 'ww.turismosantos.com.br',
-        imageUrls: [
-          require('./assets/Patrimonios/CASA DO TREM BÉLICO 01.jpg'),
-          require('./assets/Patrimonios/CASA DO TREM BÉLICO 02.jpg'),
-          require('./assets/Patrimonios/CASA DO TREM BÉLICO 03.jpg'),
-        ],
-        latitude: -23.9329357,
-        longitude: -46.32324679999999,
-      },
-      {
-        id: '2',
-        name: 'Igreja Nossa Senhora do Rosário',
-        shortDescription: 'Templo com origens na Irmandade de Nossa Senhora do Rosário dos Homens Pretos, que promovia a religiosidade católica entre a população negra.',
-        address: 'Praça Ruy Barbosa, S/N Centro, Santos - SP, 11010-000', // Novo campo
-        about: 'A Igreja Nossa Senhora do Rosário é um templo histórico com origens na Irmandade de Nossa Senhora do Rosário dos Homens Pretos, que promovia a religiosidade católica entre a população negra escravizada, sendo um marco importante na história da cidade.', // Texto detalhado para 'SOBRE'
-        appearsIn: [ // Novo campo para 'APARECE EM'
-          { text: 'Rota Religiosa de Santos', rating: 4.5 },
-        ],
-        location: 'Praça Ruy Barbosa, S/N Centro, Santos - SP, 11010-000', // Mantido para detalhes
-        project: 'Capela',
-        author: 'Marx Hell',
-        inauguration: '1882',
-        originalUse: 'Capela',
-        currentUse: 'Igreja',
-        history: 'Templo com origens na Irmandade de Nossa Senhora do Rosário dos Homens Pretos, que promovia a religiosidade católica entre a população negra escravizada.',
-        tombamento: 'Não especificado na fonte',
-        grade: 'N/A',
-        operation: 'Dias: todos os dias exceto terça e sábado. Horário: 17h a 19h. Custo de ingresso: Gratuito. Acessibilidade: acessível.',
-        source: 'roteirosbs.com.br, alxadasa.usp.br',
-        imageUrls: [
-          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO 01.jpg'),
-          require('./assets/Patrimonios/IGREJA NOSSA SENHORA DO ROSÁRIO 02.jpg'),
-        ],
-        latitude: -23.9298,
-        longitude: -46.3305,
-      },
-            {
-        id: '3', // Certifique-se de que o ID é único
-        name: 'BASÍLICA EMBARÉ',
-        shortDescription: 'Igreja com projeto de E. Kemnitz, inaugurada em 1945 e utilizada como capela.',
-        address: 'Av. Bartholom eu de Gusmão, 32 - Embaré, Santos - SP', // Adaptei o endereço
-        about: 'A Basílica Embaré é um importante templo religioso em Santos, cujo projeto é de E. Kemnitz. Foi inaugurada em 1945 e, desde então, serve como um espaço de culto e fé para a comunidade.',
-        appearsIn: [], // Adicione tours ou rotas se houver
-        location: 'Av. Bartholom eu de Gusmão, 32 - Embaré, Santos - SP',
-        project: 'Não especificado (Uso Original: Capela)',
-        author: 'E. Kemnitz',
-        inauguration: '1945',
-        originalUse: 'Capela',
-        currentUse: 'Basílica',
-        history: 'Inaugurada em 1945, a Basílica Embaré é uma obra de E. Kemnitz, inicialmente concebida como capela.',
-        tombamento: 'Não especificado na fonte',
-        grade: 'Não especificado na fonte',
-        operation: 'Dias: Segunda a Sábado. Horário: Segunda a Sábado. Custo de ingresso: Gratuito. Acessibilidade: acessível.', // Adaptei do que estava visível
-        source: 'n/a',
-        imageUrls: [
-          require('./assets/Patrimonios/BASÍLICA EMBARÉ 01.jpg'),
-          require('./assets/Patrimonios/BASÍLICA EMBARÉ 02.jpg'),
-          require('./assets/Patrimonios/BASÍLICA EMBARÉ 03.jpg'),
-        ], // Adicione require('./assets/Patrimonios/BASILICA_EMBARE_01.jpg') se tiver imagens
-        latitude: -23.9743034, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DA BASÍLICA EMBARÉ
-        longitude: -46.320091617, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DA BASÍLICA EMBARÉ
-      },
-      {
-        id: '4', // Certifique-se de que o ID é único
-        name: 'CASA DA CÂMARA E CADEIA',
-        shortDescription: 'Edifício de 1836, originalmente para administração pública municipal e uso educacional.',
-        address: 'Pr. dos Andradas, S/N - Centro, Santos - SP',
-        about: 'A Casa da Câmara e Cadeia é um edifício histórico de 1836, construído com pedra, cal, argila, areia e melado. Serviu inicialmente para administração pública municipal e também teve uso educacional. Atualmente, mantém sua relevância histórica e cultural.',
-        appearsIn: [], // Adicione tours ou rotas se houver
-        location: 'Pr. dos Andradas, S/N - Centro, Santos - SP',
-        project: 'Não especificado',
-        author: 'Desconhecido',
-        inauguration: '1836',
-        originalUse: 'Administração pública municipal',
-        currentUse: 'Administração pública/Educacional (confirmar)', // Confirme o uso atual
-        history: 'Construída em 1836 com materiais como pedra, cal, argila, areia e melado, o edifício teve um papel crucial na administração pública da cidade.',
-        tombamento: 'Não especificado na fonte',
-        grade: 'Não especificado na fonte',
-        operation: 'Dias: Segunda a Sexta. Horário: 08:00 a 18:00. Custo de ingresso: Gratuito. Acessibilidade: acessível.', // Adaptei do que estava visível
-        source: 'http://jornalperspectiva.com.br/santos-e-suas-historias/',
-        imageUrls: [
-          require('./assets/Patrimonios/CASA DA CÂMARA 01.jpg'),
-          require('./assets/Patrimonios/CASA DA CÂMARA 02.jpg'),
-          require('./assets/Patrimonios/CASA DA CÂMARA 03.jpg'),
-        ], // Adicione require('./assets/Patrimonios/CASA_CAMARA_CADEIA_01.jpg') se tiver imagens
-        latitude: -23.9366, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DA CASA DA CÂMARA E CADEIA
-        longitude: -46.3292, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DA CASA DA CÂMARA E CADEIA
-      },
-      {
-        id: '5', // Certifique-se de que o ID é único
-        name: 'DECK DO PESCADOR',
-        shortDescription: 'Local de pesca e lazer inaugurado em 2003, projetado por Ricardo Cuttin e Carlos Prates.',
-        address: 'Avenida Bartolomeu de Gusmão, em frente ao número 32 - Embaré, Santos - SP', // Adaptei o endereço
-        about: 'O Deck do Pescador, inaugurado em 2003, é um projeto de Ricardo Cuttin e Carlos Prates. É um espaço destinado à pesca e ao lazer, oferecendo uma vista privilegiada da orla de Santos e sendo um ponto de encontro para moradores e turistas.',
-        appearsIn: [], // Adicione tours ou rotas se houver
-        location: 'Avenida Bartolomeu de Gusmão, em frente',
-        project: 'Deck de Pesca',
-        author: 'Ricardo Cuttin e Carlos Prates',
-        inauguration: '2003',
-        originalUse: 'Pesca',
-        currentUse: 'Pesca',
-        history: 'Projetado e inaugurado em 2003, o Deck do Pescador tornou-se um local popular para a prática da pesca amadora e para o lazer na orla santista.',
-        tombamento: 'Não especificado na fonte',
-        grade: 'Não especificado na fonte',
-        operation: 'Dias: Todos os dias. Horário: Aberto. Custo de ingresso: Gratuito. Acessibilidade: acessível.', // Adaptei do que estava visível
-        source: 'n/a',
-        imageUrls: [
-          require('./assets/Patrimonios/DECK DO PESCADOR 01.jpg'),
-          require('./assets/Patrimonios/DECK DO PESCADOR 02.jpg'),
-        ], 
-        latitude: -23.9782, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DO DECK DO PESCADOR (pode ser a mesma da Basílica por ser "em frente")
-        longitude: -46.3094, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DO DECK DO PESCADOR
-      },
-      {
-        id: '6', // Certifique-se de que o ID é único
-        name: 'MUSEU DO CAFÉ',
-        shortDescription: 'Museu de 1998, visa preservar e divulgar a história do café, com projeto de Roberto Cochrane Simonsen.',
-        address: 'R. Quinze de Novembro, 95 - Centro, Santos - SP',
-        about: 'O Museu do Café, inaugurado em 1998, é um projeto de Roberto Cochrane Simonsen. Sua missão é preservar e divulgar a história do café no Brasil e sua importância para o desenvolvimento do país, especialmente para a cidade de Santos. O museu funciona no antigo prédio da Bolsa Oficial de Café, um edifício histórico e de grande valor arquitetônico.',
-        appearsIn: [], // Adicione tours ou rotas se houver
-        location: 'R. Quinze de Novembro, 95 - Centro, Santos - SP',
-        project: 'Museu',
-        author: 'Roberto Cochrane Simonsen',
-        inauguration: '1998',
-        originalUse: 'Bolsa Oficial de Café (confirmar)', // Assumindo pelo contexto
-        currentUse: 'Museu',
-        history: 'Fundado em 1998, o Museu do Café foi estabelecido para contar a rica história do café, desde seu cultivo até a comercialização, e seu impacto na economia brasileira.',
-        tombamento: 'Não especificado na fonte',
-        grade: 'Não especificado na fonte',
-        operation: 'Dias: Terça a Domingo. Horário: de terça a domingo. Custo de ingresso: pago (confirmar). Acessibilidade: acessível.', // Adaptei do que estava visível
-        source: 'n/a',
-        imageUrls: [
-          require('./assets/Patrimonios/MUSEU DO CAFÉ 01.png'),
-          require('./assets/Patrimonios/MUSEU DO CAFÉ 02.png'),
-        ], // Adicione require('./assets/Patrimonios/MUSEU_CAFE_01.jpg') se tiver imagens
-        latitude: -23.9351, // POR FAVOR, SUBSTITUA PELA LATITUDE CORRETA DO MUSEU DO CAFÉ
-        longitude: -46.3262, // POR FAVOR, SUBSTITUA PELA LONGITUDE CORRETA DO MUSEU DO CAFÉ
-      },
-    ]);
-    const [selectedSite, setSelectedSite] = useState<HeritageSite | null>(null);
-    const [modalVisible, setModalVisible] = useState(false);
-
-
+  // location
   useEffect(() => {
+    let mounted = true;
     (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setErrorMsg('Permissão para acessar a localização foi negada. O mapa será centrado em Santos.');
-        setLocation({ coords: { latitude: SANTOS_LATITUDE, longitude: SANTOS_LONGITUDE, accuracy: 0, altitude: 0, heading: 0, speed: 0, altitudeAccuracy: 0 }, timestamp: 0 });
+        if (!mounted) return;
+        setErrorMsg('Permissão de localização negada — centrando mapa em Santos.');
+        setLocation({
+          coords: {
+            latitude: SANTOS_LATITUDE,
+            longitude: SANTOS_LONGITUDE,
+            accuracy: 0,
+            altitude: 0,
+            heading: 0,
+            speed: 0,
+            altitudeAccuracy: 0,
+          },
+          timestamp: Date.now(),
+        } as Location.LocationObject);
         return;
       }
       try {
-        let currentLocation = await Location.getCurrentPositionAsync({});
-        setLocation(currentLocation);
+        const current = await Location.getCurrentPositionAsync({});
+        if (!mounted) return;
+        setLocation(current);
       } catch (e) {
-        console.error("Erro ao obter localização atual:", e);
-        setErrorMsg('Não foi possível obter sua localização atual. O mapa será centrado em Santos.');
-        setLocation({ coords: { latitude: SANTOS_LATITUDE, longitude: SANTOS_LONGITUDE, accuracy: 0, altitude: 0, heading: 0, speed: 0, altitudeAccuracy: 0 }, timestamp: 0 });
+        console.error('Erro posição:', e);
+        if (!mounted) return;
+        setErrorMsg('Não foi possível obter localização — centrando em Santos.');
+        setLocation({
+          coords: {
+            latitude: SANTOS_LATITUDE,
+            longitude: SANTOS_LONGITUDE,
+            accuracy: 0,
+            altitude: 0,
+            heading: 0,
+            speed: 0,
+            altitudeAccuracy: 0,
+          },
+          timestamp: Date.now(),
+        } as Location.LocationObject);
       }
     })();
+    return () => { mounted = false; };
   }, []);
 
-  interface HandleMarkerPressSite {
-    id: string;
-    name: string;
-    shortDescription: string;
-    address?: string;
-    about?: string;
-    appearsIn?: { text: string; rating?: number }[];
-    location?: string;
-    project?: string;
-    author?: string;
-    inauguration?: string;
-    originalUse?: string;
-    currentUse?: string;
-    history?: string;
-    tombamento?: string;
-    grade?: string;
-    operation?: string;
-    source?: string;
-    imageUrls?: any[];
-    latitude: number;
-    longitude: number;
-  }
-
-  const handleMarkerPress = (site: HandleMarkerPressSite): void => {
-    setSelectedSite(site);
-    setModalVisible(true);
-    setCurrentImageIndex(0); // Reinicia o índice da imagem ao abrir o modal
+  // função utilitária: tenta extrair número válido de vários formatos
+  const parseNumber = (v: any): number | null => {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v)) return null;
+      return v;
+    }
+    const parsed = parseFloat(String(v).replace(',', '.'));
+    return Number.isNaN(parsed) ? null : parsed;
   };
 
-  interface ScrollEvent {
-    nativeEvent: {
-      contentOffset: {
-        x: number;
-        y: number;
-      };
-    };
-  }
+  // Firestore realtime: mapeia e preserva nomes originais do Firestore
+  useEffect(() => {
+    setSitesLoading(true);
+    const colRef = collection(firebaseFirestore, 'patrimonios_santos');
 
-  const handleScroll = (event: ScrollEvent) => {
+    console.log('Iniciando onSnapshot patrimonios_santos...');
+    const unsubscribe = onSnapshot(
+      colRef,
+      (snapshot) => {
+        console.log('Snapshot recebido, docs:', snapshot.size);
+        const sites: HeritageSite[] = snapshot.docs.map((doc) => {
+          const data: any = doc.data() || {};
+
+          // preserva campos originais (usando os nomes reais)
+          const nm_patrimonio = data.nm_patrimonio || '';
+          const nm_autor_projeto = data.nm_autor_projeto || '';
+          const imageUrls = Array.isArray(data.imageUrls) ? data.imageUrls : (data.images || data.fotos || []);
+          const ic_inauguracao = data.ic_inauguracao || data.ic_inauguracao || '';
+          const ds_fonte = data.ds_fonte || '';
+          const ds_funcionamento = data.ds_funcionamento || '';
+          const nu_longitude_raw = data.nu_longitude ?? data.longitude ?? data.lng ?? null;
+          const nu_latitude_raw = data.nu_latitude ?? data.latitude ?? data.lat ?? null;
+          const ic_tombamento = data.ic_tombamento || '';
+          const ds_uso_original = data.ds_uso_original || '';
+          const ds_uso_atual = data.ds_uso_atual || '';
+          const ds_localizacao = data.ds_localizacao || '';
+          const ds_historico = data.ds_historico || '';
+          const ds_endereco = data.ds_endereco || '';
+          const ds_grau = data.ds_grau || '';
+          const ic_projeto = data.ic_projeto || '';
+
+          // parse para números (pois você disse que são float64 no Firestore)
+          const parsedLat = parseNumber(nu_latitude_raw);
+          const parsedLng = parseNumber(nu_longitude_raw);
+
+          if (parsedLat === null || parsedLng === null) {
+            console.warn(`Documento ${doc.id} sem coords válidas. nu_latitude:${nu_latitude_raw} nu_longitude:${nu_longitude_raw}`);
+          }
+
+          const site: HeritageSite = {
+            id: doc.id,
+            nm_patrimonio,
+            nm_autor_projeto,
+            imageUrls,
+            ic_inauguracao,
+            ds_fonte,
+            ds_funcionamento,
+            nu_longitude: nu_longitude_raw,
+            nu_latitude: nu_latitude_raw,
+            ic_tombamento,
+            ds_uso_original,
+            ds_uso_atual,
+            ds_localizacao,
+            ds_historico,
+            ds_endereco,
+            ds_grau,
+            ic_projeto,
+            latitude: parsedLat ?? 0,   // convenience field (usado para markers)
+            longitude: parsedLng ?? 0,  // convenience field
+          };
+
+          return site;
+        });
+
+        setHeritageSites(sites);
+        setSitesLoading(false);
+      },
+      (err) => {
+        console.error('Erro no snapshot do Firestore:', err);
+        // fallback: tenta getDocs uma vez
+        (async () => {
+          try {
+            const q = await getDocs(colRef);
+            const sites: HeritageSite[] = q.docs.map((doc) => {
+              const data: any = doc.data() || {};
+              const nm_patrimonio = data.nm_patrimonio || '';
+              const nm_autor_projeto = data.nm_autor_projeto || '';
+              const imageUrls = Array.isArray(data.imageUrls) ? data.imageUrls : (data.images || data.fotos || []);
+              const nu_longitude_raw = data.nu_longitude ?? data.longitude ?? data.lng ?? null;
+              const nu_latitude_raw = data.nu_latitude ?? data.latitude ?? data.lat ?? null;
+              const parsedLat = parseNumber(nu_latitude_raw);
+              const parsedLng = parseNumber(nu_longitude_raw);
+              return {
+                id: doc.id,
+                nm_patrimonio,
+                nm_autor_projeto,
+                imageUrls,
+                nu_longitude: nu_longitude_raw,
+                nu_latitude: nu_latitude_raw,
+                latitude: parsedLat ?? 0,
+                longitude: parsedLng ?? 0,
+                ds_localizacao: data.ds_localizacao || '',
+                ds_endereco: data.ds_endereco || '',
+                ds_historico: data.ds_historico || '',
+                ds_grau: data.ds_grau || '',
+                ds_funcionamento: data.ds_funcionamento || '',
+                ic_inauguracao: data.ic_inauguracao || '',
+                ds_fonte: data.ds_fonte || '',
+                ic_tombamento: data.ic_tombamento || '',
+                ds_uso_original: data.ds_uso_original || '',
+                ds_uso_atual: data.ds_uso_atual || '',
+                ic_projeto: data.ic_projeto || '',
+              } as HeritageSite;
+            });
+            setHeritageSites(sites);
+          } catch (e2) {
+            console.error('Fallback getDocs também falhou:', e2);
+          } finally {
+            setSitesLoading(false);
+          }
+        })();
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // handlers
+  const handleMarkerPress = (site: HeritageSite) => {
+    setSelectedSite(site);
+    setModalVisible(true);
+    setCurrentImageIndex(0);
+    if (scrollViewRef.current) scrollViewRef.current.scrollTo({ x: 0, animated: false });
+  };
+
+  const handleScroll = (event: any) => {
     const contentOffsetX = event.nativeEvent.contentOffset.x;
-    const imageWidth = screenWidth * 0.9 - (35 * 2); // Correct calculation for modalImage width
+    const imageWidth = screenWidth * 0.9;
     const index = Math.round(contentOffsetX / imageWidth);
     setCurrentImageIndex(index);
   };
 
+  // render source aceita strings (urls) ou require locais
+  const renderImageSource = (source: any) => {
+    if (!source) return undefined;
+    if (typeof source === 'string') return { uri: source };
+    return source;
+  };
+
+  // texto de localização
   let text = 'Esperando a localização...';
-  if (errorMsg) {
-    text = errorMsg;
-  } else if (location) {
-    text = `Latitude: ${location.coords.latitude}, Longitude: ${location.coords.longitude}`;
-  }
+  if (errorMsg) text = errorMsg;
+  else if (location) text = `Latitude: ${location.coords.latitude}, Longitude: ${location.coords.longitude}`;
 
   return (
     <SafeAreaView style={styles.mapContainer}>
@@ -390,28 +329,30 @@ const MapScreen = () => {
             latitudeDelta: 0.0922,
             longitudeDelta: 0.0421,
           }}
-          showsUserLocation={true}
-          followsUserLocation={true}
+          showsUserLocation
+          followsUserLocation
         >
           <Marker
-            coordinate={{
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-            }}
-            title={"Sua Localização"}
-            description={"Você está aqui!"}
+            coordinate={{ latitude: location.coords.latitude, longitude: location.coords.longitude }}
+            title="Sua Localização"
+            description="Você está aqui!"
             pinColor="blue"
           />
-          {heritageSites.map((site) => (
-            <Marker
-              key={site.id}
-              coordinate={{ latitude: site.latitude, longitude: site.longitude }}
-              title={site.name}
-              description={site.shortDescription} // Usando shortDescription para o marcador
-              onPress={() => handleMarkerPress(site)}
-              pinColor="red"
-            />
-          ))}
+
+          {heritageSites.map((site) => {
+            // usa os campos originais nu_latitude/nu_longitude convertidos para numbers (convenience fields)
+            if (!site || !Number.isFinite(site.latitude) || !Number.isFinite(site.longitude)) return null;
+            return (
+              <Marker
+                key={site.id}
+                coordinate={{ latitude: site.latitude!, longitude: site.longitude! }}
+                title={site.nm_patrimonio || '(sem nome)'}
+                description={site.ds_localizacao || site.ds_endereco || undefined}
+                onPress={() => handleMarkerPress(site)}
+                pinColor="red"
+              />
+            );
+          })}
         </MapView>
       ) : (
         <View style={styles.loadingMapContainer}>
@@ -420,23 +361,40 @@ const MapScreen = () => {
         </View>
       )}
 
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => {
-          setModalVisible(!modalVisible);
-        }}
-      >
+      {/* painel debug temporário (remova em produção) */}
+      <View style={{ position: 'absolute', top: 80, left: 10, right: 10, backgroundColor: 'rgba(255,255,255,0.95)', padding: 8, borderRadius: 8, zIndex: 999 }}>
+        <Text style={{ fontWeight: 'bold' }}>DEBUG Firestore</Text>
+        <Text>Docs carregados: {heritageSites.length}</Text>
+        {heritageSites.slice(0, 4).map((s, i) => (
+          <View key={s.id || i} style={{ marginTop: 6 }}>
+            <Text style={{ fontWeight: '600' }}>{i + 1}. {s.nm_patrimonio || '(sem nome)'}</Text>
+            <Text style={{ fontSize: 12, color: '#333' }}>nu_latitude: {String(s.nu_latitude)} • nu_longitude: {String(s.nu_longitude)}</Text>
+            <Text style={{ fontSize: 12, color: '#333' }}>latitude: {String(s.latitude)} • longitude: {String(s.longitude)}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* loading overlay */}
+      {sitesLoading && (
+        <View style={{ position: 'absolute', top: 20, left: 0, right: 0, alignItems: 'center', zIndex: 999 }}>
+          <View style={{ backgroundColor: 'rgba(255,255,255,0.95)', padding: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center' }}>
+            <ActivityIndicator size="small" color="#8A2BE2" />
+            <Text style={{ marginLeft: 8 }}>Carregando patrimônios...</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Modal com detalhes mantendo campos originais */}
+      <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
         <View style={styles.centeredView}>
-          <View style={styles.modalView}> {/* Novo estilo para o card do modal */}
-            {selectedSite && (
-              <ScrollView contentContainerStyle={styles.modalScrollViewContent}> {/* ScrollView para todo o conteúdo do card */}
-                {/* Carrossel de Imagens */}
+          <View style={styles.modalView}>
+            {selectedSite ? (
+              <ScrollView contentContainerStyle={styles.modalScrollViewContent}>
+                {/* Carrossel */}
                 {selectedSite.imageUrls && selectedSite.imageUrls.length > 0 ? (
                   <View style={styles.imageCarouselContainer}>
                     <ScrollView
-                      ref={scrollViewRef}
+                      ref={(r) => (scrollViewRef.current = r)}
                       horizontal
                       pagingEnabled
                       showsHorizontalScrollIndicator={false}
@@ -444,24 +402,15 @@ const MapScreen = () => {
                       scrollEventThrottle={16}
                       style={styles.imageCarouselScrollView}
                     >
-                      {selectedSite.imageUrls.map((source, index) => (
-                        <Image
-                          key={index}
-                          source={source}
-                          style={styles.modalImageModern} // Novo estilo para a imagem dentro do carrossel
-                          onError={(e) => console.log('Erro ao carregar imagem:', e.nativeEvent.error)}
-                        />
+                      {selectedSite.imageUrls.map((src, idx) => (
+                        <Image key={idx} source={renderImageSource(src)} style={styles.modalImageModern} onError={(e) => console.log('Erro imagem:', e.nativeEvent?.error || e)} />
                       ))}
                     </ScrollView>
+
                     {selectedSite.imageUrls.length > 1 && (
                       <View style={styles.paginationDots}>
-                        {selectedSite.imageUrls.map((_, index) => (
-                          <Text
-                            key={index}
-                            style={index === currentImageIndex ? styles.activeDot : styles.dot}
-                          >
-                            ●
-                          </Text>
+                        {selectedSite.imageUrls.map((_, i) => (
+                          <Text key={i} style={i === currentImageIndex ? styles.activeDot : styles.dot}>●</Text>
                         ))}
                       </View>
                     )}
@@ -470,118 +419,39 @@ const MapScreen = () => {
                   <Text style={styles.noImageText}>Imagem não disponível</Text>
                 )}
 
-                {/* Título e Endereço */}
+                {/* Info (usando nomes do Firestore) */}
                 <View style={styles.infoBlock}>
-                  <Text style={styles.modalTitleModern}>{selectedSite.name}</Text>
-                  {selectedSite.address && (
-                    <Text style={styles.modalAddress}>{selectedSite.address}</Text>
-                  )}
+                  <Text style={styles.modalTitleModern}>{selectedSite.nm_patrimonio}</Text>
+                  {selectedSite.ds_endereco ? <Text style={styles.modalAddress}>{selectedSite.ds_endereco}</Text> : null}
                 </View>
 
-                {/* Seção SOBRE */}
-                {selectedSite.about && (
+                {selectedSite.ds_historico ? (
                   <View style={styles.sectionContainer}>
                     <Text style={styles.sectionTitle}>SOBRE</Text>
-                    <Text style={styles.sectionContent}>{selectedSite.about}</Text>
+                    <Text style={styles.sectionContent}>{selectedSite.ds_historico}</Text>
                   </View>
-                )}
+                ) : null}
 
-                {/* Seção APARECE EM */}
-                {selectedSite.appearsIn && selectedSite.appearsIn.length > 0 && (
-                  <View style={styles.sectionContainer}>
-                    <Text style={styles.sectionTitle}>APARECE EM</Text>
-                    {selectedSite.appearsIn.map((item, index) => (
-                      <View key={index} style={styles.appearsInRow}>
-                        <Text style={styles.appearsInText}>{item.text}</Text>
-                        {item.rating && (
-                          <Text style={styles.appearsInRating}>⭐ {item.rating}</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                )}
-
-                {/* Detalhes do Patrimônio (seção detalhada anterior) - Opcional, pode ser menos prominente */}
+                {/* outros detalhes mapeados por nomes originais */}
                 <View style={styles.heritageDetailsContainer}>
                   <Text style={styles.sectionTitle}>MAIS DETALHES</Text>
-                  {selectedSite.location && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Localização:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.location}</Text>
-                    </View>
-                  )}
-                  {selectedSite.project && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Projeto:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.project}</Text>
-                    </View>
-                  )}
-                  {selectedSite.author && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Autor do Projeto:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.author}</Text>
-                    </View>
-                  )}
-                  {selectedSite.inauguration && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Inauguração:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.inauguration}</Text>
-                    </View>
-                  )}
-                  {selectedSite.originalUse && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Uso Original:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.originalUse}</Text>
-                    </View>
-                  )}
-                  {selectedSite.currentUse && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Uso Atual:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.currentUse}</Text>
-                    </View>
-                  )}
-                  {selectedSite.history && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Histórico:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.history}</Text>
-                    </View>
-                  )}
-                  {selectedSite.tombamento && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Tombamento:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.tombamento}</Text>
-                    </View>
-                  )}
-                  {selectedSite.grade && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Grau:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.grade}</Text>
-                    </View>
-                  )}
-                  {selectedSite.operation && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Funcionamento:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.operation}</Text>
-                    </View>
-                  )}
-                  {selectedSite.source && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Fonte:</Text>
-                      <Text style={styles.detailValue}>{selectedSite.source}</Text>
-                    </View>
-                  )}
+                  {selectedSite.ds_localizacao && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Localização:</Text><Text style={styles.detailValue}>{selectedSite.ds_localizacao}</Text></View>)}
+                  {selectedSite.nm_autor_projeto && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Autor:</Text><Text style={styles.detailValue}>{selectedSite.nm_autor_projeto}</Text></View>)}
+                  {selectedSite.ic_inauguracao && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Inauguração:</Text><Text style={styles.detailValue}>{selectedSite.ic_inauguracao}</Text></View>)}
+                  {selectedSite.ds_uso_original && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Uso Original:</Text><Text style={styles.detailValue}>{selectedSite.ds_uso_original}</Text></View>)}
+                  {selectedSite.ds_uso_atual && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Uso Atual:</Text><Text style={styles.detailValue}>{selectedSite.ds_uso_atual}</Text></View>)}
+                  {selectedSite.ds_funcionamento && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Funcionamento:</Text><Text style={styles.detailValue}>{selectedSite.ds_funcionamento}</Text></View>)}
+                  {selectedSite.ds_fonte && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Fonte:</Text><Text style={styles.detailValue}>{selectedSite.ds_fonte}</Text></View>)}
+                  {selectedSite.ds_grau && (<View style={styles.detailRow}><Text style={styles.detailLabel}>Grau:</Text><Text style={styles.detailValue}>{selectedSite.ds_grau}</Text></View>)}
                 </View>
               </ScrollView>
-       )}
-            {/* Novo container para o botão de fechar */}
-            <View style={styles.buttonContainer}> {/* Adicione esta View */}
-              <TouchableOpacity
-                style={[styles.button, styles.buttonClose]}
-                onPress={() => setModalVisible(!modalVisible)}
-              >
+            ) : null}
+
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity style={[styles.button, styles.buttonClose]} onPress={() => setModalVisible(false)}>
                 <Text style={styles.textStyle}>Fechar</Text>
               </TouchableOpacity>
-            </View> {/* Feche esta View */}
+            </View>
           </View>
         </View>
       </Modal>
@@ -589,61 +459,32 @@ const MapScreen = () => {
   );
 };
 
-// --- Componente da Tela de Pesquisa de Patrimônios ---
-const SearchScreen = () => {
+// ---------- SearchScreen (mantive simples) ----------
+const SearchScreen: React.FC = () => {
   const [searchText, setSearchText] = useState('');
-  const [recentSearches, setRecentSearches] = useState([
-    'Santos, São Paulo, Brasil',
-    'Salvador, Bahia, Brasil',
-    'São Paulo, São Paulo, Brasil',
-  ]);
+  const [recentSearches, setRecentSearches] = useState(['Santos, São Paulo, Brasil', 'Salvador, Bahia, Brasil', 'São Paulo, São Paulo, Brasil']);
 
   const ClearSearchIcon = ({ color }: { color: string }) => (
     <Svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M18 6L6 18M6 6L18 18"/>
+      <Path d="M18 6L6 18M6 6L18 18" />
     </Svg>
   );
 
   const handleSearch = () => {
-    if (searchText && !recentSearches.includes(searchText)) {
-      setRecentSearches([searchText, ...recentSearches.slice(0, 4)]);
-    }
-    console.log('Pesquisando por:', searchText);
+    if (searchText && !recentSearches.includes(searchText)) setRecentSearches([searchText, ...recentSearches.slice(0, 4)]);
   };
 
-  interface ClearRecentSearchProps {
-    itemToClear: string;
-  }
-
-  const clearRecentSearch = (itemToClear: ClearRecentSearchProps['itemToClear']): void => {
-    setRecentSearches(recentSearches.filter((item: string) => item !== itemToClear));
-  };
+  const clearRecentSearch = (itemToClear: string) => setRecentSearches(recentSearches.filter((it) => it !== itemToClear));
 
   return (
     <SafeAreaView style={styles.screenContainer}>
-      <View style={styles.searchPageHeader}>
-        <Text style={styles.searchPageTitle}>Pesquisar</Text>
-      </View>
-
+      <View style={styles.searchPageHeader}><Text style={styles.searchPageTitle}>Pesquisar</Text></View>
       <View style={styles.modernSearchInputContainer}>
         <Svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={styles.modernSearchIcon}>
-          <Circle cx="11" cy="11" r="8" />
-          <Path d="M21 21L16.65 16.65" />
+          <Circle cx="11" cy="11" r="8" /><Path d="M21 21L16.65 16.65" />
         </Svg>
-        <TextInput
-          style={styles.modernSearchInput}
-          placeholder="Pesquisar"
-          placeholderTextColor="#888"
-          value={searchText}
-          onChangeText={setSearchText}
-          onSubmitEditing={handleSearch}
-          returnKeyType="search"
-        />
-        {searchText.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchText('')} style={styles.modernClearSearchButton}>
-            <ClearSearchIcon color="#888" />
-          </TouchableOpacity>
-        )}
+        <TextInput style={styles.modernSearchInput} placeholder="Pesquisar" placeholderTextColor="#888" value={searchText} onChangeText={setSearchText} onSubmitEditing={handleSearch} returnKeyType="search" />
+        {searchText.length > 0 && (<TouchableOpacity onPress={() => setSearchText('')} style={styles.modernClearSearchButton}><ClearSearchIcon color="#888" /></TouchableOpacity>)}
       </View>
 
       <ScrollView style={styles.recentSearchesContainer}>
@@ -652,12 +493,8 @@ const SearchScreen = () => {
             <Text style={styles.recentSearchesTitle}>PESQUISAS RECENTES</Text>
             {recentSearches.map((item, index) => (
               <View key={index} style={styles.recentSearchItem}>
-                <TouchableOpacity onPress={() => setSearchText(item)} style={styles.recentSearchTextContainer}>
-                  <Text style={styles.recentSearchText}>{item}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => clearRecentSearch(item)} style={styles.recentSearchClearButton}>
-                  <ClearSearchIcon color="#888" />
-                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setSearchText(item)} style={styles.recentSearchTextContainer}><Text style={styles.recentSearchText}>{item}</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => clearRecentSearch(item)} style={styles.recentSearchClearButton}><ClearSearchIcon color="#888" /></TouchableOpacity>
               </View>
             ))}
           </>
@@ -667,75 +504,34 @@ const SearchScreen = () => {
   );
 };
 
-// --- Componente da Tela de Perfil ---
+// ---------- ProfileScreen ----------
 const ProfileScreen = ({ navigation }: { navigation: ProfileScreenNavigationProp }) => {
-  const handleLogout = () => {
-    console.log('Logout simulado!');
-    navigation.navigate('Auth');
-  };
+  const handleLogout = () => navigation.navigate('Auth');
 
   return (
     <SafeAreaView style={styles.profileScreenContainer}>
-      <View style={styles.profileHeaderBar}>
-        <Text style={styles.profileHeaderTitle}>Perfil</Text>
-      </View>
-
+      <View style={styles.profileHeaderBar}><Text style={styles.profileHeaderTitle}>Perfil</Text></View>
       <ScrollView contentContainerStyle={styles.profileContentContainer}>
         <View style={styles.profileHeader}>
-          <Image
-            source={require('./assets/perfil.jpg')}
-            style={styles.profileImage}
-          />
-          <TouchableOpacity>
-            <Text style={styles.changeProfileImageText}>Mudar imagem de perfil</Text>
-          </TouchableOpacity>
+          <Image source={require('./assets/perfil.jpg')} style={styles.profileImage} />
+          <TouchableOpacity><Text style={styles.changeProfileImageText}>Mudar imagem de perfil</Text></TouchableOpacity>
         </View>
 
         <View style={styles.profileDetailsList}>
-          <TouchableOpacity style={styles.profileDetailRow}>
-            <Text style={styles.profileDetailLabel}>Nome</Text>
-            <Text style={styles.profileDetailValue}>Inacio Silva</Text>
-            <Text style={styles.profileDetailArrow}>{'>'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.profileDetailRow}>
-            <Text style={styles.profileDetailLabel}>Username</Text>
-            <Text style={styles.profileDetailValue}>@inacio_luz</Text>
-            <Text style={styles.profileDetailArrow}>&gt;</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.profileDetailRow}>
-            <Text style={styles.profileDetailLabel}>Email</Text>
-            <Text style={styles.profileDetailValue}>inaciosilva@gmail.com</Text>
-            <Text style={styles.profileDetailArrow}>&gt;</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.profileDetailRow}>
-            <Text style={styles.profileDetailLabel}>Bio</Text>
-            <Text style={styles.profileDetailValue}>Turistando pela cidade de Santos!</Text>
-            <Text style={styles.profileDetailArrow}>&gt;</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.profileDetailRow}>
-            <Text style={styles.profileDetailLabel}>Premium</Text>
-            <Text style={styles.profileDetailValue}>Assinatura ativada</Text>
-            <Text style={styles.profileDetailArrow}>&gt;</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.profileDetailRow, styles.lastProfileDetailRow]}>
-            <Text style={styles.profileDetailLabel}>Configurações</Text>
-            <Text style={styles.profileDetailArrow}>&gt;</Text>
-          </TouchableOpacity>
+          <TouchableOpacity style={styles.profileDetailRow}><Text style={styles.profileDetailLabel}>Nome</Text><Text style={styles.profileDetailValue}>Inacio Silva</Text><Text style={styles.profileDetailArrow}>{'>'}</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.profileDetailRow}><Text style={styles.profileDetailLabel}>Username</Text><Text style={styles.profileDetailValue}>@inacio_luz</Text><Text style={styles.profileDetailArrow}>&gt;</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.profileDetailRow}><Text style={styles.profileDetailLabel}>Email</Text><Text style={styles.profileDetailValue}>inaciosilva@gmail.com</Text><Text style={styles.profileDetailArrow}>&gt;</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.profileDetailRow}><Text style={styles.profileDetailLabel}>Bio</Text><Text style={styles.profileDetailValue}>Turistando pela cidade de Santos!</Text><Text style={styles.profileDetailArrow}>&gt;</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.profileDetailRow, styles.lastProfileDetailRow]}><Text style={styles.profileDetailLabel}>Configurações</Text><Text style={styles.profileDetailArrow}>&gt;</Text></TouchableOpacity>
         </View>
-        <TouchableOpacity style={[styles.button, styles.logoutButtonProfile]} onPress={handleLogout}>
-          <Text style={styles.buttonText}>Sair</Text>
-        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.button, styles.logoutButtonProfile]} onPress={handleLogout}><Text style={styles.buttonText}>Sair</Text></TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 };
 
-// --- Componente que contém as Abas de Navegação (Bottom Tabs) ---
+// ---------- MainTabs ----------
 const MainTabs = () => {
   const MapIcon = ({ color }: { color: string }) => (
     <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -746,15 +542,13 @@ const MainTabs = () => {
 
   const SearchIcon = ({ color }: { color: string }) => (
     <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <Circle cx="11" cy="11" r="8" />
-      <Path d="M21 21L16.65 16.65" />
+      <Circle cx="11" cy="11" r="8" /><Path d="M21 21L16.65 16.65" />
     </Svg>
   );
 
   const ProfileIcon = ({ color }: { color: string }) => (
     <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-      <Circle cx="12" cy="7" r="4" />
+      <Path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><Circle cx="12" cy="7" r="4" />
     </Svg>
   );
 
@@ -782,13 +576,9 @@ const MainTabs = () => {
           elevation: 10,
         },
         tabBarIcon: ({ color }) => {
-          if (route.name === 'Map') {
-            return <MapIcon color={color} />;
-          } else if (route.name === 'Search') {
-            return <SearchIcon color={color} />;
-          } else if (route.name === 'Profile') {
-            return <ProfileIcon color={color} />;
-          }
+          if (route.name === 'Map') return <MapIcon color={color} />;
+          if (route.name === 'Search') return <SearchIcon color={color} />;
+          if (route.name === 'Profile') return <ProfileIcon color={color} />;
           return null;
         },
       })}
@@ -800,7 +590,7 @@ const MainTabs = () => {
   );
 };
 
-// --- Componente Principal da Aplicação ---
+// ---------- App ----------
 export default function App() {
   return (
     <NavigationContainer>
@@ -812,463 +602,74 @@ export default function App() {
   );
 }
 
-// --- Estilos da Aplicação ---
+// ---------- Styles ----------
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-  },
-  noImageText: {
-    width: '100%',
-    textAlign: 'center',
-    color: '#888',
-    fontSize: 16,
-    marginVertical: 20,
-  },
-  infoBlock: {
-    width: '100%',
-    marginTop: 10,
-    marginBottom: 10,
-    paddingHorizontal: 20,
-  },
-  logo: {
-    width: 400,
-    height: 200,
-    marginBottom: 40,
-  },
-  input: {
-    width: '80%',
-    padding: 15,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    fontSize: 16,
-  },
-  button: {
-    backgroundColor: '#D31570',
-    width: '80%',
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  toggleText: {
-    marginTop: 20,
-    color: '#D31570',
-    fontSize: 16,
-  },
-  // Estilos do mapa
-  mapContainer: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#e0f7fa',
-  },
-  loadingMapContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: '100%',
-  },
-  mapSubtitle: {
-    fontSize: 16,
-    color: '#555',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  map: {
-    width: '100%',
-    height: '100%',
-  },
-  // Estilos para as novas telas (Search e Profile)
-  screenContainer: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  screenTitle: {
-    fontSize: 26,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    marginTop: 20,
-    color: '#333',
-    textAlign: 'center',
-  },
-  screenSubtitle: {
-    fontSize: 18,
-    color: '#555',
-    marginBottom: 15,
-  },
-  // --- Estilos para a Tela de Pesquisa ---
-  searchPageHeader: {
-    width: '100%',
-    backgroundColor: '#8A2BE2',
-    paddingTop: Platform.OS === 'android' ? 40 : 50,
-    paddingBottom: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 5,
-  },
-  searchPageTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  modernSearchInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EFEFF4',
-    borderRadius: 10,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 5,
-    paddingHorizontal: 15,
-    marginHorizontal: 20,
-    marginTop: 20,
-    marginBottom: 20,
-  },
-  modernSearchIcon: {
-    marginRight: 10,
-  },
-  modernSearchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#333',
-    paddingVertical: 0,
-  },
-  modernClearSearchButton: {
-    marginLeft: 10,
-    padding: 5,
-  },
-  modernClearSearchText: {
-    fontSize: 18,
-    color: '#888',
-  },
-  recentSearchesContainer: {
-    flex: 1,
-    width: '100%',
-    paddingHorizontal: 20,
-  },
-  recentSearchesTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#888',
-    marginBottom: 10,
-    marginLeft: 5,
-  },
-  recentSearchItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 5,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  recentSearchTextContainer: {
-    flex: 1,
-  },
-  recentSearchText: {
-    fontSize: 16,
-    color: '#333',
-  },
-  recentSearchClearButton: {
-    padding: 5,
-  },
-  recentSearchClearIcon: {
-    fontSize: 16,
-    color: '#888',
-  },
-  // --- Estilos para a Tela de Perfil ---
-  profileScreenContainer: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  profileHeaderBar: {
-    width: '100%',
-    backgroundColor: '#8A2BE2',
-    paddingTop: Platform.OS === 'android' ? 40 : 50,
-    paddingBottom: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 5,
-  },
-  profileHeaderTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  profileContentContainer: {
-    alignItems: 'center',
-    paddingTop: 20,
-    paddingHorizontal: 20,
-  },
-  profileHeader: {
-    alignItems: 'center',
-    marginBottom: 30,
-  },
-  profileImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#ccc',
-    marginBottom: 10,
-  },
-  changeProfileImageText: {
-    color: '#8A2BE2',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  profileDetailsList: {
-    width: '100%',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    paddingVertical: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  profileDetailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  lastProfileDetailRow: {
-    borderBottomWidth: 0,
-  },
-  profileDetailLabel: {
-    fontSize: 16,
-    color: '#555',
-    flex: 1,
-  },
-  profileDetailValue: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: 'bold',
-    marginRight: 10,
-  },
-  profileDetailArrow: {
-    fontSize: 18,
-    color: '#888',
-    fontWeight: 'bold',
-  },
-  logoutButtonProfile: {
-    marginTop: 30,
-    backgroundColor: '#dc3545',
-  },
-  // Estilos do modal
-  centeredView: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 22,
-    backgroundColor: 'rgb(255, 255, 255)',
-  },
-  modalView: { // Este é o container principal do modal, que será um card com bordas arredondadas
-    backgroundColor: 'white',
-    borderRadius: 20,
-    width: '90%', // Ocupa a largura total do centeredView (90%)
-    maxHeight: '90%', // Permite que o modal seja alto o suficiente, mas com margem
-    overflow: 'hidden', // Importante para que as bordas arredondadas funcionem com o carrossel de imagens
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-    paddingTop: 0, // Removido padding superior para que a imagem encoste na borda
-    paddingHorizontal: 0, // Removido padding horizontal para que a imagem encoste na borda
-    paddingBottom: 20, // Mantém o padding inferior para o botão
-    
-  },
-  modalScrollViewContent: { // Novo estilo para o conteúdo interno do ScrollView do modal
-    alignItems: 'center',
-    paddingBottom: 20, // Espaçamento extra no final do conteúdo
-  },
-  modalTitle: { // Título principal (Educandário Anália Franco) - ESTILO ANTIGO
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 15,
-    textAlign: 'center',
-    color: '#333',
-    width: '100%',
-  },
-  modalTitleModern: { // Novo estilo para o título do patrimônio
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 15, // Espaçamento superior após a imagem/carrossel
-    marginBottom: 5,
-    textAlign: 'left',
-    width: '100%',
-    paddingHorizontal: 20, // Padding para alinhar com o conteúdo
-  },
-  modalAddress: { // Novo estilo para o endereço
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 20,
-    textAlign: 'left',
-    width: '100%',
-    paddingHorizontal: 20, // Padding para alinhar com o conteúdo
-  },
-  // Estilos do carrossel de imagens no modal
-  imageCarouselContainer: {
-    width: '100%', // Ocupa a largura total do modal
-    height: 200, // Altura fixa para o carrossel
-    marginBottom: 0, // Removido o espaçamento para que a imagem encoste na borda superior do modal
-    borderRadius: 0, // Removido o arredondamento aqui, pois ele é feito no modalImageModern
-    overflow: 'hidden',
-  },
-  imageCarouselScrollView: {
-    width: '100%',
-    height: '100%',
-  },
-  modalImageModern: { // Estilo para cada imagem dentro do carrossel
-    width: screenWidth * 0.9, // A imagem deve ter a largura do modal para `pagingEnabled`
-    height: '100%',
-    resizeMode: 'cover',
-    borderTopLeftRadius: 20, // Arredondamento superior esquerdo
-    borderTopRightRadius: 20, // Arredondamento superior direito
-  },
-  paginationDots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 10,
-    position: 'absolute',
-    bottom: 5,
-    width: '100%',
-  },
-  dot: {
-    color: '#ccc',
-    marginHorizontal: 5,
-    fontSize: 18,
-  },
-  activeDot: {
-    color: '#8A2BE2',
-    marginHorizontal: 5,
-    fontSize: 18,
-  },
-  // Estilos para as seções (SOBRE, APARECE EM)
-  sectionContainer: {
-    width: '100%',
-    marginTop: 15,
-    marginBottom: 10,
-    paddingHorizontal: 20, // Adicionado padding horizontal
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#888',
-    marginBottom: 5,
-    textTransform: 'uppercase',
-  },
-  sectionContent: {
-    fontSize: 16,
-    color: '#333',
-    lineHeight: 22,
-    textAlign: 'justify',
-  },
-  appearsInRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 5,
-  },
-  appearsInText: {
-    fontSize: 16,
-    color: '#333',
-  },
-  appearsInRating: {
-    fontSize: 14,
-    color: '#FFD700',
-    fontWeight: 'bold',
-  },
-  // Estilos para os detalhes do patrimônio (lista abaixo de SOBRE/APARECE EM)
-  heritageDetailsContainer: {
-    width: '100%',
-    marginTop: 20,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 3,
-    paddingHorizontal: 20, // Padding para alinhar com o conteúdo
-  },
-  detailRow: {
-    flexDirection: 'row',
-    marginBottom: 8,
-    alignItems: 'flex-start',
-  },
-  detailLabel: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
-    width: '35%',
-  },
-  detailValue: {
-    fontSize: 14,
-    color: '#555',
-    flex: 1,
-    textAlign: 'left',
-  },
-  textStyle: {
-    color: 'white',
-    fontWeight: 'bold',
-    textAlign: 'center',
-    fontSize: 18,
-  },
-  buttonClose: {
-    backgroundColor: '#A432C0', // Cor roxa
-    width: '80%', // Ocupa 80% do modal
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-    
-  },
-  modalContent: { // ESTILO ANTIGO (já existia mas não estava em uso no modal principal)
-    alignItems: 'center',
-    paddingBottom: 20,
-  },
-    buttonContainer: {
-    width: '100%', // O container ocupa a largura total do modalView
-    alignItems: 'center', // Centraliza o conteúdo (o botão) dentro deste container
-    marginTop: 15, // Espaçamento superior para separar do conteúdo acima (ScrollView)
-    paddingHorizontal: 20, // Opcional: Se você quiser que o botão respeite o padding horizontal do modal
-  },
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' },
+  noImageText: { width: '100%', textAlign: 'center', color: '#888', fontSize: 16, marginVertical: 20 },
+  infoBlock: { width: '100%', marginTop: 10, marginBottom: 10, paddingHorizontal: 20 },
+  logo: { width: 400, height: 200, marginBottom: 40 },
+  input: { width: '80%', padding: 15, marginBottom: 20, borderWidth: 1, borderColor: '#ddd', borderRadius: 10, backgroundColor: '#fff', fontSize: 16 },
+  button: { backgroundColor: '#D31570', width: '80%', padding: 15, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
+  buttonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  toggleText: { marginTop: 20, color: '#D31570', fontSize: 16 },
+  mapContainer: { flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center', backgroundColor: '#e0f7fa' },
+  loadingMapContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
+  mapSubtitle: { fontSize: 16, color: '#555', marginBottom: 10, textAlign: 'center' },
+  map: { width: '100%', height: '100%' },
+  screenContainer: { flex: 1, backgroundColor: '#f5f5f5' },
+  screenTitle: { fontSize: 26, fontWeight: 'bold', marginBottom: 20, marginTop: 20, color: '#333', textAlign: 'center' },
+  screenSubtitle: { fontSize: 18, color: '#555', marginBottom: 15 },
+  searchPageHeader: { width: '100%', backgroundColor: '#8A2BE2', paddingTop: Platform.OS === 'android' ? 40 : 50, paddingBottom: 15, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
+  searchPageTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
+  modernSearchInputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFEFF4', borderRadius: 10, paddingVertical: Platform.OS === 'ios' ? 10 : 5, paddingHorizontal: 15, marginHorizontal: 20, marginTop: 20, marginBottom: 20 },
+  modernSearchIcon: { marginRight: 10 },
+  modernSearchInput: { flex: 1, fontSize: 16, color: '#333', paddingVertical: 0 },
+  modernClearSearchButton: { marginLeft: 10, padding: 5 },
+  modernClearSearchText: { fontSize: 18, color: '#888' },
+  recentSearchesContainer: { flex: 1, width: '100%', paddingHorizontal: 20 },
+  recentSearchesTitle: { fontSize: 14, fontWeight: 'bold', color: '#888', marginBottom: 10, marginLeft: 5 },
+  recentSearchItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 5, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  recentSearchTextContainer: { flex: 1 },
+  recentSearchText: { fontSize: 16, color: '#333' },
+  recentSearchClearButton: { padding: 5 },
+  recentSearchClearIcon: { fontSize: 16, color: '#888' },
+  profileScreenContainer: { flex: 1, backgroundColor: '#f5f5f5' },
+  profileHeaderBar: { width: '100%', backgroundColor: '#8A2BE2', paddingTop: Platform.OS === 'android' ? 40 : 50, paddingBottom: 15, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 },
+  profileHeaderTitle: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
+  profileContentContainer: { alignItems: 'center', paddingTop: 20, paddingHorizontal: 20 },
+  profileHeader: { alignItems: 'center', marginBottom: 30 },
+  profileImage: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#ccc', marginBottom: 10 },
+  changeProfileImageText: { color: '#8A2BE2', fontSize: 16, fontWeight: 'bold' },
+  profileDetailsList: { width: '100%', backgroundColor: '#fff', borderRadius: 10, paddingVertical: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 3 },
+  profileDetailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  lastProfileDetailRow: { borderBottomWidth: 0 },
+  profileDetailLabel: { fontSize: 16, color: '#555', flex: 1 },
+  profileDetailValue: { fontSize: 16, color: '#333', fontWeight: 'bold', marginRight: 10 },
+  profileDetailArrow: { fontSize: 18, color: '#888', fontWeight: 'bold' },
+  logoutButtonProfile: { marginTop: 30, backgroundColor: '#dc3545' },
+  centeredView: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 22, backgroundColor: 'rgb(255, 255, 255)' },
+  modalView: { backgroundColor: 'white', borderRadius: 20, width: '90%', maxHeight: '90%', overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5, paddingTop: 0, paddingHorizontal: 0, paddingBottom: 20 },
+  modalScrollViewContent: { alignItems: 'center', paddingBottom: 20 },
+  modalTitleModern: { fontSize: 22, fontWeight: 'bold', color: '#333', marginTop: 15, marginBottom: 5, textAlign: 'left', width: '100%', paddingHorizontal: 20 },
+  modalAddress: { fontSize: 14, color: '#666', marginBottom: 20, textAlign: 'left', width: '100%', paddingHorizontal: 20 },
+  imageCarouselContainer: { width: '100%', height: 200, marginBottom: 0, borderRadius: 0, overflow: 'hidden' },
+  imageCarouselScrollView: { width: '100%', height: '100%' },
+  modalImageModern: { width: screenWidth * 0.9, height: '100%', resizeMode: 'cover', borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  paginationDots: { flexDirection: 'row', justifyContent: 'center', marginTop: 10, position: 'absolute', bottom: 5, width: '100%' },
+  dot: { color: '#ccc', marginHorizontal: 5, fontSize: 18 },
+  activeDot: { color: '#8A2BE2', marginHorizontal: 5, fontSize: 18 },
+  sectionContainer: { width: '100%', marginTop: 15, marginBottom: 10, paddingHorizontal: 20 },
+  sectionTitle: { fontSize: 14, fontWeight: 'bold', color: '#888', marginBottom: 5, textTransform: 'uppercase' },
+  sectionContent: { fontSize: 16, color: '#333', lineHeight: 22, textAlign: 'justify' },
+  appearsInRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
+  appearsInText: { fontSize: 16, color: '#333' },
+  appearsInRating: { fontSize: 14, color: '#FFD700', fontWeight: 'bold' },
+  heritageDetailsContainer: { width: '100%', marginTop: 20, backgroundColor: '#fff', borderRadius: 10, padding: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 3, paddingHorizontal: 20 },
+  detailRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'flex-start' },
+  detailLabel: { fontSize: 14, fontWeight: 'bold', color: '#333', width: '35%' },
+  detailValue: { fontSize: 14, color: '#555', flex: 1, textAlign: 'left' },
+  textStyle: { color: 'white', fontWeight: 'bold', textAlign: 'center', fontSize: 18 },
+  buttonClose: { backgroundColor: '#A432C0', width: '80%', padding: 15, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
+  modalContent: { alignItems: 'center', paddingBottom: 20 },
+  buttonContainer: { width: '100%', alignItems: 'center', marginTop: 15, paddingHorizontal: 20 },
 });
